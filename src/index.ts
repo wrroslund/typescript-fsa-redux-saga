@@ -1,9 +1,33 @@
 import {AsyncActionCreators} from "typescript-fsa" ;
-import {SagaIterator} from "redux-saga";
+import { SagaIterator, delay } from "redux-saga";
 import {put, call, cancelled} from "redux-saga/effects";
+
+
+function* callWithRetries(
+  options: BindAsyncActionOptions = {}, 
+  worker: (params: any, ...args: any[]) => Promise<any> | SagaIterator, 
+  params: any, 
+  ...args: any[]) {
+  const retryCount = options.retryCount || 1;
+  for (let i = 0; i < retryCount; i++) {
+    try {
+      const apiResponse = yield (call as any)(worker, params, ...args);
+      return apiResponse;
+    } catch (err) {
+      if (i < retryCount - 1) {
+        yield call(delay, 2000);
+      } else {
+        console.error(`call failed after ${retryCount} retries`);
+        throw err;
+      }
+      
+    }
+  }
+}
 
 export interface BindAsyncActionOptions {
   skipStartedAction?: boolean;
+  retryCount?: number;
 }
 
 export function bindAsyncAction<R>(
@@ -50,15 +74,24 @@ export function bindAsyncAction(
   actionCreator: AsyncActionCreators<any, any, any>,
   options: BindAsyncActionOptions = {},
 ) {
-  return (worker: (params: any,
-                   ...args: any[]) => Promise<any> | SagaIterator) => {
+  return (worker: (params: any, ...args: any[]) => Promise<any> | SagaIterator) => {
     function* boundAsyncActionSaga(params: any, ...args: any[]): SagaIterator {
       if (!options.skipStartedAction) {
         yield put(actionCreator.started(params));
       }
 
       try {
-        const result = yield (call as any)(worker, params, ...args);
+        let result = null;
+        if (options.retryCount && !isNaN(options.retryCount)) {
+          result  = yield (call as any)(
+            callWithRetries, 
+            options, 
+            worker, 
+            params, 
+            ...args);
+        } else {
+          result  = yield (call as any)(worker, params, ...args);
+        }
         yield put(actionCreator.done({params, result}));
         return result;
       } catch (error) {
