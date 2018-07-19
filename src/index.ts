@@ -1,4 +1,4 @@
-import {AsyncActionCreators} from "typescript-fsa" ;
+import {AsyncActionCreators, ActionCreator, Failure, Success} from "typescript-fsa" ;
 import { SagaIterator, delay } from "redux-saga";
 import {put, call, cancelled} from "redux-saga/effects";
 
@@ -25,13 +25,22 @@ function* callWithRetries(
   }
 }
 
+function isActionCreator<Q, R, S>( creator: AsyncActionCreators<Q, R, S> | AsyncBasicActionCreators<Q, S>): creator is AsyncActionCreators<Q, R, S> {
+  return (<AsyncActionCreators<Q, R, S>>creator).done !== undefined;
+
+}
+export interface AsyncBasicActionCreators<P, E> {
+  type: string;
+  failed: ActionCreator<Failure<P, E>>;
+}
+
 export interface BindAsyncActionOptions {
   skipStartedAction?: boolean;
   retryCount?: number;
 }
 
 export function bindAsyncAction<R>(
-  actionCreators: AsyncActionCreators<void, R, any>,
+  actionCreators: AsyncActionCreators<void, R, any> | AsyncBasicActionCreators<void, any>,
   options?: BindAsyncActionOptions,
 ): {
   (worker: () => Promise<R> | SagaIterator): () => SagaIterator;
@@ -51,8 +60,9 @@ export function bindAsyncAction<R>(
     (params: void, arg1: A1, arg2: A2, arg3: A3,
      ...rest: any[]) => SagaIterator;
 };
+
 export function bindAsyncAction<P, R>(
-  actionCreators: AsyncActionCreators<P, R, any>,
+  actionCreators: AsyncActionCreators<P, R, any> | AsyncBasicActionCreators<P, any>,
   options?: BindAsyncActionOptions,
 ): {
   (worker: (params: P) => Promise<R> | SagaIterator):
@@ -71,12 +81,12 @@ export function bindAsyncAction<P, R>(
 };
 
 export function bindAsyncAction(
-  actionCreator: AsyncActionCreators<any, any, any>,
+  actionCreator: AsyncActionCreators<any, any, any> | AsyncBasicActionCreators<any, any>,
   options: BindAsyncActionOptions = {},
 ) {
   return (worker: (params: any, ...args: any[]) => Promise<any> | SagaIterator) => {
     function* boundAsyncActionSaga(params: any, ...args: any[]): SagaIterator {
-      if (!options.skipStartedAction) {
+      if (isActionCreator(actionCreator) && !options.skipStartedAction) {
         yield put(actionCreator.started(params));
       }
 
@@ -92,7 +102,9 @@ export function bindAsyncAction(
         } else {
           result  = yield (call as any)(worker, params, ...args);
         }
-        yield put(actionCreator.done({params, result}));
+        if (isActionCreator(actionCreator)) {
+          yield put(actionCreator.done({params, result}));
+        }
         return result;
       } catch (error) {
         yield put(actionCreator.failed({params, error}));
